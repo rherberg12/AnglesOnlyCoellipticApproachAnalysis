@@ -242,54 +242,49 @@ class PerturbationModel:
 # =============================================================================
 # CAMERA MODEL
 # =============================================================================
- 
+    
 @dataclass
 class Camera:
-    """
-    Camera sensor model for angular measurement noise.
- 
-    FOV is fixed; focal length and IFOV scale with resolution.
-    IFOV (= epsilon) is the angular measurement accuracy per pixel.
-    """
-    megapixels: float # sensor resolution [Mpx]
-    fov_deg: float = 10.0     # full FOV, square sensor [deg]
-    pixel_pitch_um: float = 5.5  # pixel pitch [μm]
- 
+    megapixels:       float         # sensor resolution [Mpx]
+    focal_length_mm:  float = 8.5  # lens focal length [mm]
+    pixel_pitch_um:   float = 3.45   # pixel pitch [μm]
+    n_pixels: float = 2448 # number of pixels (longest dimension)
+
+    @property
+    def sensor_width_mm(self):
+        return self.n_pixels * self.pixel_pitch_um * 1e-3
+
     @property
     def fov_rad(self):
-        return np.radians(self.fov_deg)
- 
+        """Full FOV along long axis [rad]."""
+        return 2.0 * np.arctan(self.sensor_width_mm / (2.0 * self.focal_length_mm))
+
     @property
-    def n_pixels(self):
-        """Pixels per side (4:3) and use longest side."""
-        return np.sqrt(self.megapixels * 1e6 / (4*3)) * 4
- 
-    @property
-    def focal_length_mm(self):
-        """Focal length [mm] to achieve fixed FOV with given pitch & Npx."""
-        p_mm = self.pixel_pitch_um * 1e-3
-        return (self.n_pixels * p_mm) / (2.0 * np.tan(self.fov_rad / 2.0))
- 
+    def fov_deg(self):
+        return np.degrees(self.fov_rad)
+
     @property
     def ifov_rad(self):
-        """Instantaneous FOV per pixel [rad] = epsilon in Woffinden."""
+        """Instantaneous FOV per pixel [rad] = epsilon"""
         p_m = self.pixel_pitch_um * 1e-6
         f_m = self.focal_length_mm * 1e-3
         return p_m / f_m
- 
+
     @property
     def ifov_urad(self):
         return self.ifov_rad * 1e6
- 
+
     @property
     def ifov_deg(self):
         return np.degrees(self.ifov_rad)
- 
+
     def summary(self):
         return (f"{self.megapixels:.0f} Mpx | "
                 f"N={self.n_pixels:.0f} px | "
+                f"pitch={self.pixel_pitch_um:.1f} μm | "
                 f"f={self.focal_length_mm:.1f} mm | "
-                f"IFOV={self.ifov_urad:.2f} μrad/px")
+                f"FOV={self.fov_deg:.1f}° | "
+                f"IFOV={self.ifov_urad:.2f} μrad")
  
  
 # =============================================================================
@@ -424,7 +419,7 @@ class ScenarioConfig:
     Am_target:   float = 0.02
     maneuver:    Optional[ManeuverDef] = None
     include_perturbations: bool = True
-    dR:          float = -10_000.0
+    dR:          float = 10_000.0
     sun_hat0:    np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0]))
 
     def __post_init__(self):
@@ -571,7 +566,7 @@ def study2_camera_resolution_trade(
         )
         metrics['t_hours'] = scen.t_hours
         metrics['camera']  = cam
-        results[cam.megapixels] = metrics
+        results[cam.focal_length_mm] = metrics
  
     return results, scen
  
@@ -585,7 +580,7 @@ def study3_maneuver_sizing(
         cameras: List[Camera],
         maneuver_type: np.ndarray,
         t_burn_s: float,
-        target_pct_error: float = 1.0,   # target % range error
+        target_pct_error: float = 5.0,   # target % range error
         dv_sweep: Optional[np.ndarray] = None
     ):
     """
@@ -651,7 +646,7 @@ def study3_maneuver_sizing(
             dv_req = np.nan
             achievable = False
  
-        results[cam.megapixels] = {
+        results[cam.focal_length_mm] = {
             'dv_required':      dv_req,
             'theta_required_deg': theta_req_deg,
             'achievable':       achievable,
@@ -677,12 +672,12 @@ COLORS = {
     '- 45 deg':     "#FFF700",   # yellow
 }
 CAM_COLORS = ['#7C4DFF', '#00BCD4', '#FF9800', '#E91E63']  # 1,5,10,15 Mpx
-STYLE = {'figure.facecolor': '#0d1117', 'axes.facecolor': '#161b22',
-         'axes.edgecolor': '#30363d', 'axes.labelcolor': '#e6edf3',
-         'xtick.color': '#8b949e', 'ytick.color': '#8b949e',
-         'grid.color': '#21262d', 'grid.linewidth': 0.8,
-         'text.color': '#e6edf3', 'legend.facecolor': '#1c2128',
-         'legend.edgecolor': '#30363d'}
+STYLE = {'figure.facecolor': '#ffffff', 'axes.facecolor': '#f5f6f7',
+         'axes.edgecolor': '#5e646c', 'axes.labelcolor': '#5e646c',
+         'xtick.color': '#5e646c', 'ytick.color': '#5e646c',
+         'grid.color': '#d0d3d6', 'grid.linewidth': 0.8,
+         'text.color': '#5e646c', 'legend.facecolor': '#ffffff',
+         'legend.edgecolor': '#d0d3d6'}
  
  
 def apply_style():
@@ -692,23 +687,21 @@ def apply_style():
 def plot_study1(results: dict, dv_mag: float, save: bool = True):
     apply_style()
     maneuver_types = ['+ Cross Track', '+ Altitude', '+ 45 deg', '- Radial', '- 45 deg']
- 
+
     fig = plt.figure(figsize=(16, 10))
     fig.suptitle(f'STUDY 1 — Maneuver Profile Trade  |  ΔV = {dv_mag:.3f} m/s',
-                    fontsize=13, fontweight='bold', color='#e6edf3')
+                    fontsize=13, fontweight='bold')
     gs = gridspec.GridSpec(3, 1, hspace=0.45)
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1])
     ax3 = fig.add_subplot(gs[2])
 
     for mtype in maneuver_types:
-        key = mtype
-        r = results[key]
+        r = results[mtype]
         t = r['t_hours']
         c = COLORS[mtype]
-
         ax1.plot(t, r['theta'],           color=c, lw=1.8, label=mtype)
-        ax2.plot(t, r['delta_rho'],  color=c, lw=1.8, label=mtype)
+        ax2.plot(t, r['delta_rho'],       color=c, lw=1.8, label=mtype)
         ax3.plot(t, r['pct_range_error'], color=c, lw=1.8, label=mtype)
 
     for ax, ylabel, title in [
@@ -716,11 +709,9 @@ def plot_study1(results: dict, dv_mag: float, save: bool = True):
         (ax2, 'δρ [m]',        'Detectability Range Error δρ(t)'),
         (ax3, 'δρ/r [%]',       'Detectability % Range Error δρ/r(t)'),
     ]:
-        ax.axhline(1.0 if ax == ax3 else 0, color='#30363d', lw=0.8)
         if ax == ax3:
-            ax.axhline(1.0, color="#007618", ls=':', lw=1.2,
-                        label='1% threshold')
-            ax.set_ylim([0.0,100.0])
+            ax.axhline(5.0, color='#2E7D32', ls=':', lw=1.2, label='5% threshold')
+            ax.set_ylim([0.0, 100.0])
         ax.set_ylabel(ylabel)
         ax.set_title(title, fontsize=10)
         ax.legend(fontsize=8, loc='upper right')
@@ -728,31 +719,28 @@ def plot_study1(results: dict, dv_mag: float, save: bool = True):
 
     ax3.set_xlabel('Time [hr]')
 
-    apply_style() 
+    apply_style()
     fig = plt.figure(figsize=(16, 10))
     fig.suptitle(f'STUDY 1 — Trajectories  |  ΔV = {dv_mag:.3f} m/s',
-                    fontsize=13, fontweight='bold', color='#e6edf3')
+                    fontsize=13, fontweight='bold')
     gs = gridspec.GridSpec(1, 2, hspace=0.45)
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1])
 
     for mtype in maneuver_types:
-        key = mtype
-        if key not in results:
+        if mtype not in results:
             continue
-        r = results[key]
-        t = r['t_hours']
+        r = results[mtype]
         c = COLORS[mtype]
         radial = r['r_true'][:,0]
         alongTrack = r['r_true'][:,1]
         crossTrack = r['r_true'][:,2]
-
-        ax1.plot(alongTrack, radial, color=c, lw=1.8, label=mtype)
-        ax2.plot(crossTrack, radial,  color=c, lw=1.8, label=mtype)
+        ax1.plot(alongTrack, radial,    color=c, lw=1.8, label=mtype)
+        ax2.plot(crossTrack, radial,    color=c, lw=1.8, label=mtype)
 
     for ax, xlabel, title in [
-        (ax1, 'Along-Track [m]',        'Orbital Plane'),
-        (ax2, 'Cross-Track [m]',        'Along-Track Perspective'),
+        (ax1, 'Along-Track [m]',  'Orbital Plane'),
+        (ax2, 'Cross-Track [m]',  'Along-Track Perspective'),
     ]:
         ax.set_xlabel(xlabel)
         ax.set_title(title, fontsize=10)
@@ -760,98 +748,93 @@ def plot_study1(results: dict, dv_mag: float, save: bool = True):
         ax.grid(True, alpha=0.5)
 
     ax1.set_ylabel('Radial [m]')
-
     plt.tight_layout()
-    plt.show() 
- 
+    plt.show()
+
+
 def plot_study2(results: dict, scen: Scenario, cameras: List[Camera],
                 save: bool = True):
     apply_style()
     fig = plt.figure(figsize=(16, 10))
     fig.suptitle('STUDY 2 — Camera Resolution Trade',
-                 fontsize=13, fontweight='bold', color='#e6edf3')
+                 fontsize=13, fontweight='bold')
     gs = gridspec.GridSpec(3, 1, hspace=0.45)
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1])
     ax3 = fig.add_subplot(gs[2])
- 
+
     for cam, color in zip(cameras, CAM_COLORS):
-        mpx = cam.megapixels
-        r   = results[mpx]
+        fcl = cam.focal_length_mm
+        r   = results[fcl]
         t   = r['t_hours']
-        lbl = f'{mpx:.0f} Mpx  (IFOV={cam.ifov_urad:.2f} μrad)'
- 
+        lbl = f'{fcl:.1f} mm (FOV={cam.fov_deg:.2f} deg)'
         ax1.plot(t, r['theta'],           color=color, lw=1.8, label=lbl)
-        ax2.plot(t, r['delta_rho'],  color=color, lw=1.8, label=lbl)
+        ax2.plot(t, r['delta_rho'],       color=color, lw=1.8, label=lbl)
         ax3.plot(t, r['pct_range_error'], color=color, lw=1.8, label=lbl)
- 
+
     for ax, ylabel, title in [
         (ax1, 'θ [deg]',   'Observability Angle θ(t)  [same for all cameras]'),
-        (ax2, 'δρ [m]',   'Detectability Range Error δρ(t)'),
+        (ax2, 'δρ [m]',    'Detectability Range Error δρ(t)'),
         (ax3, 'δρ/r [%]',  'Detectability % Range Error δρ/r(t)'),
     ]:
         if ax == ax3:
-            ax.axhline(1.0, color='#FFD700', ls=':', lw=1.2, label='1% req.')
+            ax.axhline(5.0, color='#2E7D32', ls=':', lw=1.2, label='5% req.')
         ax.set_ylabel(ylabel)
         ax.set_title(title, fontsize=10)
         ax.legend(fontsize=8, loc='upper right')
         ax.grid(True, alpha=0.5)
- 
-    ax3.set_xlabel('Time [hr]')
 
+    ax3.set_xlabel('Time [hr]')
     plt.tight_layout()
     plt.show()
- 
- 
+
+
 def plot_study3(results: dict, cameras: List[Camera],
-                target_pct: float = 1.0, save: bool = False):
+                target_pct: float = 5.0, save: bool = False):
     apply_style()
     fig, ax_r = plt.subplots(1, 1, figsize=(14, 6))
     fig.suptitle(f'STUDY 3 — Required ΔV for {target_pct:.0f}% Range Error',
-                 fontsize=13, fontweight='bold', color='#e6edf3')
-    
-    dv_reqs = []
-    labels  = []
-    colors  = []
+                 fontsize=13, fontweight='bold')
+
+    dv_reqs, labels, colors = [], [], []
     for cam, color in zip(cameras, CAM_COLORS):
-        r = results[cam.megapixels]
+        r = results[cam.focal_length_mm]
         dv_reqs.append(r['dv_required'] if r['achievable'] else np.nan)
-        labels.append(f'{cam.megapixels:.0f} Mpx')
+        labels.append(f'{cam.focal_length_mm:.1f} mm')
         colors.append(color)
- 
+
     x_pos = np.arange(len(cameras))
-    bars = ax_r.bar(x_pos, dv_reqs, color=colors, edgecolor='#30363d', linewidth=0.8)
+    bars = ax_r.bar(x_pos, dv_reqs, color=colors, edgecolor='#5e646c', linewidth=0.8)
     ax_r.set_xticks(x_pos)
     ax_r.set_xticklabels(labels)
     ax_r.set_ylabel('Required ΔV [m/s]')
-    ax_r.set_title(f'ΔV Required to Achieve {target_pct:.0f}% Range Error')
+    ax_r.set_title(f'ΔV Required to Achieve {target_pct:.0f}% Detectability Range Error')
     ax_r.grid(True, alpha=0.4, axis='y')
     for bar, val in zip(bars, dv_reqs):
         if not np.isnan(val):
             ax_r.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.0005,
-                      f'{val:.4f} m/s', ha='center', va='bottom', fontsize=9)
-    
-    apply_style() 
+                      f'{val:.4f} m/s', ha='center', va='bottom', fontsize=11)
+
+    apply_style()
     fig = plt.figure(figsize=(16, 10))
     fig.suptitle(f'STUDY 3 — Trajectories',
-                    fontsize=13, fontweight='bold', color='#e6edf3')
+                    fontsize=13, fontweight='bold')
     gs = gridspec.GridSpec(1, 2, hspace=0.45)
     ax1 = fig.add_subplot(gs[0])
     ax2 = fig.add_subplot(gs[1])
 
     for cam, color in zip(cameras, CAM_COLORS):
-        r = results[cam.megapixels]['maneuver']
+        r = results[cam.focal_length_mm]['maneuver']
         t = r['t_hours']
         radial = r['r_true'][:,0]
         alongTrack = r['r_true'][:,1]
         crossTrack = r['r_true'][:,2]
-
-        ax1.plot(alongTrack, crossTrack, color=color, lw=1.8, label=f'{cam.megapixels:.0f} Mpx')
-        ax2.plot(radial, crossTrack,  color=color, lw=1.8, label=f'{cam.megapixels:.0f} Mpx')
+        ax1.plot(alongTrack, crossTrack, color=color, lw=1.8, label=f'{cam.focal_length_mm:.1f} mm, {cam.fov_deg} deg FOV')
+        ax2.plot(radial,     crossTrack, color=color, lw=1.8, label=f'{cam.focal_length_mm:.1f} mm, {cam.fov_deg} deg FOV')
 
     for ax, xlabel, title in [
-        (ax1, 'Along-Track [m]',        'Radial Perspective'),
-        (ax2, 'Radial [m]',        'Along-Track Perspective'),
+        (ax1, 'Along-Track [m]', 'Radial Perspective'),
+        (ax2, 'Radial [m]',      'Along-Track Perspective'),
     ]:
         ax.set_xlabel(xlabel)
         ax.set_title(title, fontsize=10)
@@ -859,7 +842,6 @@ def plot_study3(results: dict, cameras: List[Camera],
         ax.grid(True, alpha=0.5)
 
     ax1.set_ylabel('Cross-Track [m]')
-    
     plt.tight_layout()
     plt.show()
  
@@ -869,8 +851,8 @@ def plot_study3(results: dict, cameras: List[Camera],
 # =============================================================================
  
 def main():
-    study1 = True
-    study2 = True
+    study1 = False
+    study2 = False
     study3 = True
 
 
@@ -892,13 +874,14 @@ def main():
  
     # --- Cameras ---
     cameras = [
-        Camera(megapixels=1,  fov_deg=5.0, pixel_pitch_um=5.5),
-        Camera(megapixels=5,  fov_deg=5.0, pixel_pitch_um=5.5),
-        Camera(megapixels=10, fov_deg=5.0, pixel_pitch_um=5.5),
-        Camera(megapixels=15, fov_deg=5.0, pixel_pitch_um=5.5),
+        Camera(megapixels=5,  focal_length_mm=8.5, pixel_pitch_um=3.45, n_pixels=2448),
+        Camera(megapixels=5,  focal_length_mm=12.0, pixel_pitch_um=3.45, n_pixels=2448),
+        Camera(megapixels=5,  focal_length_mm=16.0, pixel_pitch_um=3.45, n_pixels=2448),
+        Camera(megapixels=5,  focal_length_mm=25.0, pixel_pitch_um=3.45, n_pixels=2448),
     ]
+    for cam in cameras:
+        print(cam.summary())
  
-    # Mid-grade camera for Study 1 (5 Mpx)
     cam_study1 = cameras[1]
     dv_mag = 0.02
     t_burn  = 0.0
@@ -925,8 +908,8 @@ def main():
  
     if study3:
         print("\n--- Study 3: Maneuver Sizing for Equivalent Performance ---")
-        target_pct = 1.0  # % range error requirement
-        dv_sweep   = np.logspace(-3, 1, 50)
+        target_pct = 5.0  # % range error requirement
+        dv_sweep   = np.logspace(-3, -1, 50)
     
         s3_results = study3_maneuver_sizing(
             base_cfg, cameras,
